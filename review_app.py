@@ -152,19 +152,22 @@ def load_decisions(doctor_id):
 @st.cache_data(show_spinner=False)
 def get_image_data_base64(patient_id, current_file):
     """Fetches image from Cloud (R2) or Local disk and returns base64 string"""
+    # Ensure current_file has .jpg extension for the storage request
+    img_filename = current_file if current_file.lower().endswith('.jpg') else f"{current_file}.jpg"
+    
     if STORAGE_MODE == "cloud":
         try:
             # Objects are at root, e.g. "OAS1_0001/mpr-1_100.jpg"
-            key = f"{patient_id}/{current_file}"
+            key = f"{patient_id}/{img_filename}"
             response = S3_CLIENT.get_object(Bucket=BUCKET_NAME, Key=key)
             data = response["Body"].read()
             return base64.b64encode(data).decode()
         except Exception as e:
-            st.error(f"Cloud fetch error: {e} | Bucket: {BUCKET_NAME} | Key: {key}")
+            # Don't show the error to user yet, returning None will trigger the main UI error
             return None
     else:
         # Local fallback
-        img_path = os.path.join(PREVIEWS_DIR, patient_id, current_file)
+        img_path = os.path.join(PREVIEWS_DIR, patient_id, img_filename)
         if os.path.exists(img_path):
             with open(img_path, "rb") as f:
                 data = base64.b64encode(f.read()).decode()
