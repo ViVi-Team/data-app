@@ -1,3 +1,6 @@
 .env
 r2
 local
+results/all_previews
+*.xlsx
+.DS_Store

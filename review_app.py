@@ -6,6 +6,8 @@ import base64
 from PIL import Image
 import io
 import re
+import boto3
+from botocore.config import Config
 import streamlit.components.v1 as components
 from datetime import datetime
 
@@ -13,7 +15,44 @@ from datetime import datetime
 # ---------- CONFIG ----------
 PREVIEWS_DIR = "./results/all_previews"
 METADATA_FILE = "./results/perturbed_labels.json"
-# We no longer save automatically to disk. Progress is held in session state.
+
+def get_r2_config():
+    """Safely get R2 config from secrets or defaults"""
+    # Streamlit's st.secrets is lazy-loaded and crashes if no file exists
+    # We check if the secrets file exists before accessing st.secrets
+    secrets_paths = [
+        os.path.join(os.path.expanduser("~"), ".streamlit", "secrets.toml"),
+        os.path.join(os.getcwd(), ".streamlit", "secrets.toml")
+    ]
+    has_secrets = any(os.path.exists(p) for p in secrets_paths)
+    
+    if has_secrets:
+        try:
+            if "R2" in st.secrets:
+                return st.secrets["R2"]
+        except Exception:
+            pass
+    return {}
+
+R2_CONFIG = get_r2_config()
+
+def get_s3_client():
+    if R2_CONFIG.get("ENDPOINT"):
+        return boto3.client(
+            "s3",
+            endpoint_url=R2_CONFIG["ENDPOINT"],
+            aws_access_key_id=R2_CONFIG["ACCESS_KEY"],
+            aws_secret_access_key=R2_CONFIG["SECRET_KEY"],
+            config=Config(signature_version="s3v4"),
+            region_name="auto"
+        )
+    return None
+
+S3_CLIENT = get_s3_client()
+BUCKET_NAME = R2_CONFIG.get("BUCKET", "dataapp")
+# Check if we should actually use cloud mode (only if R2_CONFIG has data)
+# Note: For now, we prefer cloud if credentials exist.
+STORAGE_MODE = "cloud" if S3_CLIENT else "local"
 
 st.set_page_config(layout="wide", page_title="MRI Review Pro")
 
@@ -88,6 +127,28 @@ def sanitize_id(raw_id):
 def load_decisions(doctor_id):
     """Note: Automatic loading from disk is disabled to avoid path errors."""
     return {}
+
+@st.cache_data(show_spinner=False)
+def get_image_data_base64(patient_id, current_file):
+    """Fetches image from Cloud (R2) or Local disk and returns base64 string"""
+    if STORAGE_MODE == "cloud":
+        try:
+            # Objects are at root, e.g. "OAS1_0001/mpr-1_100.jpg"
+            key = f"{patient_id}/{current_file}"
+            response = S3_CLIENT.get_object(Bucket=BUCKET_NAME, Key=key)
+            data = response["Body"].read()
+            return base64.b64encode(data).decode()
+        except Exception as e:
+            st.error(f"Cloud fetch error: {e} | Bucket: {BUCKET_NAME} | Key: {key}")
+            return None
+    else:
+        # Local fallback
+        img_path = os.path.join(PREVIEWS_DIR, patient_id, current_file)
+        if os.path.exists(img_path):
+            with open(img_path, "rb") as f:
+                data = base64.b64encode(f.read()).decode()
+            return data
+        return None
 
 @st.cache_data
 def load_metadata():
@@ -249,17 +310,15 @@ with c_next:
 st.markdown(f'<div class="info-line">Patient: <b>{selected_patient}</b> | Slide: <b>{current_file}</b> | Index: <b>{idx+1}/{total_patient_files}</b></div>', unsafe_allow_html=True)
 
 # Current Image
-img_path = os.path.join(PREVIEWS_DIR, selected_patient, current_file)
-if os.path.exists(img_path):
-    with open(img_path, "rb") as f:
-        data = base64.b64encode(f.read()).decode()
+img_data = get_image_data_base64(selected_patient, current_file)
+if img_data:
     st.markdown(f'''
         <div class="image-container" data-is-readonly="{"true" if is_readonly else "false"}">
-            <img src="data:image/jpeg;base64,{data}" style="max-height: 75vh; width: auto; max-width: 100%;">
+            <img src="data:image/jpeg;base64,{img_data}" style="max-height: 75vh; width: auto; max-width: 100%;">
         </div>
     ''', unsafe_allow_html=True)
 else:
-    st.error(f"File not found: {img_path}")
+    st.error(f"Image not found: {selected_patient}/{current_file} (Mode: {STORAGE_MODE})")
 
 # Import / Export
 st.sidebar.markdown("---")
