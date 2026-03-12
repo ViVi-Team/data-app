@@ -105,18 +105,43 @@ st.markdown("""
 
 # ---------- DATA LOADING ----------
 @st.cache_data
-def get_all_previews(root_dir):
-    """Returns {patient_id: [filenames...]}"""
+def load_all_data():
+    """Returns (previews_map, metadata_lookup, gold_lookup)
+    previews_map: {patient_id: [slides...]}
+    metadata_lookup: {(pid, slide): origin_slice}
+    gold_lookup: {pid: origin_slice}
+    """
+    if not os.path.exists(METADATA_FILE):
+        return {}, {}, {}
+        
+    with open(METADATA_FILE, 'r') as f:
+        data = json.load(f)
+    
     previews = {}
-    if not os.path.exists(root_dir):
-        return {}
-    for pid in sorted(os.listdir(root_dir)):
-        pid_path = os.path.join(root_dir, pid)
-        if os.path.isdir(pid_path) and not pid.startswith('.'):
-            files = sorted([f for f in os.listdir(pid_path) if f.lower().endswith('.jpg')])
-            if files:
-                previews[pid] = files
-    return previews
+    meta = {}
+    gold = {}
+    
+    for item in data:
+        pid = item['patient_id']
+        slide = item['slide']
+        origin = item['origin_slice']
+        
+        # Build previews_map
+        if pid not in previews:
+            previews[pid] = []
+        if slide not in previews[pid]:
+            previews[pid].append(slide)
+            
+        # Build lookups
+        meta[(pid, slide)] = origin
+        if pid not in gold:
+            gold[pid] = origin
+            
+    # Sort for consistency
+    for pid in previews:
+        previews[pid].sort()
+        
+    return previews, meta, gold
 
 # ---------- STORAGE HELPERS ----------
 def sanitize_id(raw_id):
@@ -150,29 +175,7 @@ def get_image_data_base64(patient_id, current_file):
             return data
         return None
 
-@st.cache_data
-def load_metadata():
-    """Returns (metadata_dict, gold_lookup)
-    metadata_dict: {(pid, slide): origin_slice}
-    gold_lookup: {pid: origin_slice}
-    """
-    if not os.path.exists(METADATA_FILE):
-        return {}, {}
-    with open(METADATA_FILE, 'r') as f:
-        data = json.load(f)
-    
-    meta = {}
-    gold = {}
-    for item in data:
-        pid = item['patient_id']
-        slide = item['slide']
-        origin = item['origin_slice']
-        meta[(pid, slide)] = origin
-        # The origin_slice for any perturbed item is the GOLD slide for that patient
-        if pid not in gold:
-            gold[pid] = origin
-            
-    return meta, gold
+# metadata_lookup, gold_lookup, and previews_map are now all derived from metadata
 
 # ---------- SESSION STATE ----------
 def init_state(doctor_id):
@@ -214,13 +217,13 @@ else:
 # Initialize state with doctor context
 init_state(doctor_id)
 
-previews_map = get_all_previews(PREVIEWS_DIR)
+previews_map, metadata_lookup, gold_lookup = load_all_data()
+
 if not previews_map:
-    st.error(f"No previews found in {PREVIEWS_DIR}. Please run perturbation script with --render-all first.")
+    st.error(f"Metadata file not found or empty at {METADATA_FILE}. Please ensure it is present in the repository.")
     st.stop()
 
-patients = list(previews_map.keys())
-metadata_lookup, gold_lookup = load_metadata()
+patients = sorted(list(previews_map.keys()))
 
 # ---------- NAVIGATION HELPERS ----------
 def go_next(max_idx, doctor_id):
