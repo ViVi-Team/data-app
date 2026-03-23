@@ -15,6 +15,8 @@ from datetime import datetime
 # ---------- CONFIG ----------
 PREVIEWS_DIR = "./results/all_previews"
 METADATA_FILE = "./results/perturbed_labels.json"
+# Public R2 URL base
+PUBLIC_URL_BASE = None
 
 def get_r2_config():
     """Safely get R2 config from secrets (root or [R2] section)"""
@@ -46,9 +48,9 @@ def get_s3_client():
 
 S3_CLIENT = get_s3_client()
 BUCKET_NAME = R2_CONFIG.get("BUCKET", "dataapp")
-# Check if we should actually use cloud mode (only if R2_CONFIG has data)
-# Note: For now, we prefer cloud if credentials exist.
-STORAGE_MODE = "cloud" if S3_CLIENT else "local"
+# Check if we should actually use cloud mode
+# Note: User provided a public URL, so we prefer cloud if PUBLIC_URL_BASE is set.
+STORAGE_MODE = "cloud" if PUBLIC_URL_BASE else "local"
 
 st.set_page_config(layout="wide", page_title="MRI Review Pro")
 
@@ -150,28 +152,20 @@ def load_decisions(doctor_id):
     return {}
 
 @st.cache_data(show_spinner=False)
-def get_image_data_base64(patient_id, current_file):
-    """Fetches image from Cloud (R2) or Local disk and returns base64 string"""
-    # Ensure current_file has .jpg extension for the storage request
+def get_image_url(patient_id, current_file):
+    """Returns image URL (Cloud) or local path"""
+    # Ensure current_file has .jpg extension
     img_filename = current_file if current_file.lower().endswith('.jpg') else f"{current_file}.jpg"
     
     if STORAGE_MODE == "cloud":
-        try:
-            # Objects are at root, e.g. "OAS1_0001/mpr-1_100.jpg"
-            key = f"{patient_id}/{img_filename}"
-            response = S3_CLIENT.get_object(Bucket=BUCKET_NAME, Key=key)
-            data = response["Body"].read()
-            return base64.b64encode(data).decode()
-        except Exception as e:
-            # Don't show the error to user yet, returning None will trigger the main UI error
-            return None
+        return f"{PUBLIC_URL_BASE}/{patient_id}/{img_filename}"
     else:
-        # Local fallback
+        # Local fallback (returns absolute path for local loading if needed)
         img_path = os.path.join(PREVIEWS_DIR, patient_id, img_filename)
         if os.path.exists(img_path):
             with open(img_path, "rb") as f:
                 data = base64.b64encode(f.read()).decode()
-            return data
+            return f"data:image/jpeg;base64,{data}"
         return None
 
 # metadata_lookup, gold_lookup, and previews_map are now all derived from metadata
@@ -312,11 +306,11 @@ with c_next:
 st.markdown(f'<div class="info-line">Patient: <b>{selected_patient}</b> | Slide: <b>{current_file}</b> | Index: <b>{idx+1}/{total_patient_files}</b></div>', unsafe_allow_html=True)
 
 # Current Image
-img_data = get_image_data_base64(selected_patient, current_file)
-if img_data:
+img_url = get_image_url(selected_patient, current_file)
+if img_url:
     st.markdown(f'''
         <div class="image-container" data-is-readonly="{"true" if is_readonly else "false"}">
-            <img src="data:image/jpeg;base64,{img_data}" style="max-height: 75vh; width: auto; max-width: 100%;">
+            <img src="{img_url}" style="max-height: 75vh; width: auto; max-width: 100%;">
         </div>
     ''', unsafe_allow_html=True)
 else:
