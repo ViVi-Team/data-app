@@ -44,8 +44,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 # ── Defaults ─────────────────────────────────────────────────────────────────
 DEFAULTS = {
-    "xlsx":         "./AI in Dementia Diagnosis Project_Final.xlsx",
-    "data_folder":  "./Data_by_Patient",
+    "xlsx":         "./Copy of AI in Dementia Diagnosis Project.xlsx",
+    "data_folder":  "./local/Data_by_Patient",
     "output_json":  "./results/perturbed_labels.json",
     "output_csv":   "./results/perturbed_labels.csv",
     "output_images": "./results/previews",
@@ -68,11 +68,13 @@ def parse_slice_info(filename: str):
     return None, None
 
 def parse_patient_slide(filename: str):
-    """Return (patient_id, slide_suffix) from 'PID_MR1_mpr-N_NNN.jpg'."""
+    """Return (patient_id, slide_suffix) from 'PID_MRx_mpr-N_NNN.jpg'.
+    Example: 'OAS1_0080_MR2_mpr-1_100.jpg' -> ('OAS1_0080', 'MR2_mpr-1_100')"""
     base = re.sub(r'\.jpe?g$', '', filename, flags=re.IGNORECASE)
-    parts = base.split('_MR1_', 1)
-    if len(parts) == 2:
-        return parts[0], parts[1]
+    m = re.search(r'_(MR\d+)_', base)
+    if m:
+        parts = base.split(m.group(0), 1)
+        return parts[0], f"{m.group(1)}_{parts[1]}"
     return base, ''
 
 
@@ -289,6 +291,7 @@ def generate_perturbed_labels(
                 'patient_id':   patient_id,
                 'slide':        slide_suffix,
                 'origin_slice': origin_slide,
+                'origin_fname': best_gold_fname,
                 'boxes':        perturbed_boxes,
                 'notes':        best_notes,
                 'distance':     best_dist,
@@ -372,8 +375,8 @@ def render_images(
         distance     = entry['distance']
 
         # Reconstruct filenames
-        target_fname = f"{pid}_MR1_{slide}.jpg"
-        origin_fname = f"{pid}_MR1_{origin_slide}.jpg"
+        target_fname = f"{pid}_{slide}.jpg"
+        origin_fname = f"{pid}_{origin_slide}.jpg"
 
         target_path = path_map.get(target_fname)
         origin_path = path_map.get(origin_fname)
@@ -503,7 +506,10 @@ def render_all_images(
             entry        = perturbed_lookup[perturb_key]
             status       = 'perturbed'
             origin_slide = entry['origin_slice']
-            origin_fname = f"{pid}_MR1_{origin_slide}.jpg"
+            origin_fname = entry.get('origin_fname', '')
+            if not origin_fname:
+                # fallback for old cache if any
+                origin_fname = f"{pid}_{origin_slide}.jpg"
             gold_boxes   = gold.get(origin_fname, {}).get('boxes', [])
             pert_boxes   = entry['boxes']
         else:
@@ -526,7 +532,7 @@ def render_all_images(
                 gold_src_img = target_img.copy()
             elif status == 'perturbed':
                 # Load the actual origin slide image
-                origin_fname = f"{pid}_MR1_{origin_slide}.jpg"
+                # (origin_fname already determined above)
                 origin_path  = path_map.get(origin_fname)
                 if origin_path and os.path.exists(origin_path):
                     gold_src_img = _load_image(origin_path)
@@ -772,7 +778,7 @@ def render_keystone_previews(
     for rank, c in enumerate(entries, 1):
         pid        = c['patient_id']
         slide      = c['slide']
-        fname      = f"{pid}_MR1_{slide}.jpg"
+        fname      = f"{pid}_{slide}.jpg"
         tgt_path   = path_map.get(fname)
 
         if not tgt_path or not os.path.exists(tgt_path):
