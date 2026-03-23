@@ -17,6 +17,13 @@ git lfs install
 git lfs pull
 ```
 
+Alternatively, you can download the results data manually using `gdown`:
+```bash
+pip install gdown
+gdown --id 1fj7xZWUp9YyMwVSCcyEbbQHtCHOa08hC -O results.zip
+unzip results.zip
+```
+
 ### 3. Create a Virtual Environment (Recommended)
 ```bash
 python3 -m venv .venv
